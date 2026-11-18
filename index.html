@@ -352,7 +352,7 @@
   </div>
 
   <div id="drop"><span id="dropText">강사료 엑셀 파일 업로드 (.xlsx · .xlsm · .xls)</span>
-    <button type="button" id="closeFile" style="display:none;margin-left:12px;padding:3px 12px;font-size:12px;background:#dc2626">파일 닫기</button></div>
+    <button type="button" id="closeFile" style="display:none;margin-left:12px;padding:3px 12px;font-size:12px;background:#dc2626">업로드 파일 삭제</button></div>
   <input type="file" id="file" accept=".xlsx,.xlsm,.xls,.json,.hwpx,.hwp" multiple style="display:none">
 
 
@@ -600,7 +600,7 @@
 
 <script>
 // 버전: 고칠 때마다 날짜(와 같은 날 여러 번이면 -2, -3)를 바꿔 주세요
-const APP_VERSION = '2026.11.18-2';
+const APP_VERSION = '2026.11.18-3';
 document.addEventListener('DOMContentLoaded', () => {
   const t = '버전 ' + APP_VERSION;
   ['verSide', 'verFoot'].forEach(id => { const e = document.getElementById(id); if (e) e.textContent = t; });
