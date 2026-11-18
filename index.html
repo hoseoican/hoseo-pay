@@ -642,7 +642,7 @@
 
 <script>
 // 버전: 고칠 때마다 날짜(와 같은 날 여러 번이면 -2, -3)를 바꿔 주세요
-const APP_VERSION = '2026.11.18-9';
+const APP_VERSION = '2026.11.18-10';
 document.addEventListener('DOMContentLoaded', () => {
   const t = '버전 ' + APP_VERSION;
   ['verSide', 'verFoot'].forEach(id => { const e = document.getElementById(id); if (e) e.textContent = t; });
@@ -4091,6 +4091,10 @@ function hwpFields(cells) {
   const f = {};
   for (let i = 0; i < cells.length - 1; i++) {
     const lab = hwNorm(cells[i]);
+    // 「강사 수업 보고」(여러 개): 장소명 → 프로그램명 → 근무 일수
+    if (lab === '장소명') f._pp = hwOne(cells[i + 1]);
+    if (lab === '프로그램명' && hwOne(cells[i + 1])) (f.progs = f.progs || []).push({ name: hwOne(cells[i + 1]), place: f._pp || '', cnt: null });
+    if (lab === '근무일수' && f.progs && f.progs.length) { const pr = f.progs[f.progs.length - 1], c = String(cells[i + 1] ?? '').match(/\d+/); if (pr.cnt == null && c) pr.cnt = +c[0]; }
     if (lab === '지급구분') { if (!('kindSel' in f)) f.kindSel = cells[i + 1]; i++; continue; }   // □ 강사료 ☑ 자문료 …
     const k = HW_LABELS[lab];
     if (k === 'when' && !('when' in f)) {
@@ -4106,6 +4110,11 @@ function hwpFields(cells) {
         const wl = cells.slice(j, j + w).map(x => x.trim()).filter(Boolean).join(' '), pl = cells[j + w];
         if (/\d/.test(wl)) { f.when += '\n' + wl; f.place += '\n' + pl; }   // 「( 월) 일 ~」처럼 비어 있는 행은 건너뜀
         j += w + 1;
+      }
+      // 마지막 행에 장소 칸이 없으면(「날짜 | 시간」 뒤 바로 다음 머리글) 일시만 덧붙임
+      if (j + w <= cells.length && !cells.slice(j, j + w).some(hwIsLabel) && (j + w === cells.length || hwIsLabel(cells[j + w]))) {
+        const wl = cells.slice(j, j + w).map(x => x.trim()).filter(Boolean).join(' ');
+        if (/\d/.test(wl)) { f.when += '\n' + wl; j += w; }
       }
       i = j - 1;
       continue;
@@ -4153,7 +4162,8 @@ function hwParseWhen(s) {
   days.forEach(x => { if (!x.time) x.time = lead || lastT; });
   const month = days.length ? days[days.length - 1].m : 0;   // 여러 달에 걸치면 마지막 날짜의 달
   const mine = days.filter(x => x.m === month);
-  return { month, dates: [...new Set(mine.map(x => x.d))].sort((a, b) => a - b), time: [...new Set(mine.map(x => x.time).filter(Boolean))].join(', '),
+  const timeOf = {}; mine.forEach(x => { if (x.time && !timeOf[x.d]) timeOf[x.d] = x.time; });
+  return { month, timeOf, dates: [...new Set(mine.map(x => x.d))].sort((a, b) => a - b), time: [...new Set(mine.map(x => x.time).filter(Boolean))].join(', '),
     multiMonth: days.some(x => x.m !== month), nAll: new Set(days.map(x => x.m + '/' + x.d)).size, year: (t.match(/(20\d\d)\s*[년.\-\/]/) || [])[1] || '' };
 }
 // 산출근거: 「주강사 : 75,000원*4차시*2일 = 600,000원」 (일수가 없으면 1일)
@@ -4185,12 +4195,62 @@ function hwParseAcct(s) {
   const a = rest.match(/\d[\d\- ]{5,}\d/);
   return { bank, acct: a ? a[0].replace(/\s+/g, '') : '' };
 }
+// 산출근거 여러 줄: 「주강사 40,000원 * 2시간 * 9일 = 720,000원 / 보조강사 20,000원 * 2시간 * 7일 = 280,000원」
+function hwBasisLines(s) {
+  const t = hwOne(s), out = [];
+  const re = /(주\s*강사|보조\s*강사)?\s*[:：]?\s*([\d,.]*\d)\s*원\s*[*xX×]\s*(\d+(?:\.\d+)?)\s*(차시|시간|교시|회)?\s*(?:[*xX×]\s*(\d+)\s*(?:일|회|번)?)?\s*(?:=\s*([\d,.]*\d)\s*원?)?/g;
+  let m;
+  while ((m = re.exec(t))) out.push({ role: m[1] ? (/보조/.test(m[1]) ? '보조강사' : '주강사') : '', unit: hwNum(m[2]), per: parseFloat(m[3]), perUnit: m[4] || '차시', days: m[5] ? +m[5] : 1, hasDays: !!m[5], total: m[6] ? hwNum(m[6]) : 0 });
+  return out;
+}
+// 이름·소속의 띄어쓰기: 「이 종 인」 → 이종인, 「프 리 랜 서」 → 프리랜서
+const hwName = v => { const t = hwOne(v); return /^[가-힣\s]+$/.test(t) ? t.replace(/\s+/g, '') : t; };
+const hwSpaced = v => { const t = hwOne(v); return /^(\S\s)+\S$/.test(t) ? t.replace(/\s+/g, '') : t; };
+const HW_WD = '일월화수목금토';
+// 한 신청서를 「구분 × 프로그램」으로 나눔 → 월별 출강 내역에서 프로그램마다 주강사·보조강사를 짝지음
+function hwSegs(f, W, lines, role, place, program, y, mo, notes) {
+  const roles = [...new Set(lines.map(l => l.role).filter(Boolean))];
+  const multi = roles.length > 1;
+  const progs = (f.progs || []).filter(p => p.name && !/기입/.test(p.name)).map(p => { const w = p.name.match(/[(（]\s*([일월화수목금토])(?=[\s\d)~,-])/); return { ...p, wd: w ? HW_WD.indexOf(w[1]) : -1 }; });
+  if (!multi && progs.length < 2) return null;   // 한 구분·한 프로그램이면 나누지 않음
+  // 구분별 일자: 내용의 「주강사 업무: 1, 2, 8일」 / 하나면 일시 전체
+  const roleDates = {};
+  if (multi) {
+    const raw = String(f.content ?? '');
+    for (const r of roles) {
+      const m = raw.match(new RegExp((r === '주강사' ? '주' : '보조') + '\\s*강사\\s*업무\\s*[:：]?([\\s\\S]*?)(?=(?:주|보조)\\s*강사\\s*업무|세부|$)'));
+      const ds = m ? [...m[1].replace(/\([^)]*\)/g, ' ').matchAll(/(\d{1,2})(?=\s*(?:,|일|$))/g)].map(x => +x[1]).filter(d => d >= 1 && d <= 31) : [];
+      if (!ds.length) { notes.push(`내용에서 ${r} 일자를 읽지 못함`); return null; }
+      roleDates[r] = [...new Set(ds)].sort((a, b) => a - b);
+    }
+  } else roleDates[roles[0] || role] = W.dates;
+  const segs = [];
+  for (const r of Object.keys(roleDates)) {
+    const L = lines.find(l => l.role === r) || lines[0];
+    const byProg = new Map();
+    roleDates[r].forEach(d => {
+      const wd = new Date(y, mo - 1, d).getDay();
+      const pg = progs.find(p => p.wd === wd) || (progs.length === 1 ? progs[0] : null);
+      const k = pg ? pg.name : '';
+      if (!byProg.has(k)) byProg.set(k, { pg, ds: [] });
+      byProg.get(k).ds.push(d);
+    });
+    byProg.forEach(({ pg, ds }) => {
+      const n = ds.length, t = [...new Set(ds.map(d => W.timeOf[d]).filter(Boolean))].join(', ');
+      segs.push({ role: r, program: pg ? pg.name : program, place: (pg && pg.place) || place, dates: ds, time: t, unit: L.unit, per: L.per, cha: L.per * n, amt: Math.round(L.unit * L.per * n) });
+      if (pg && pg.cnt && pg.cnt !== n) notes.push(`${pg.name}: 수업 보고 ${pg.cnt}회 ≠ ${r} 일자 ${n}일`);
+    });
+  }
+  return segs;
+}
 function hwpToApp(f, fname) {
-  const name = hwOne(f.name), jumin = jkey(f.jumin), org = hwOne(f.org), place = hwOne(f.place) || org;
+  const name = hwName(f.name), jumin = jkey(f.jumin), org = hwSpaced(f.org), place = hwOne(f.place) || org;
   const W = hwParseWhen(f.when), B = hwParseBasis(f.basis), A = hwParseAcct(f.acct);
   let content = hwOne(f.content);
   const kind = hwKind(f.kindSel), fee = !!kind && kind !== '강사료';   // 강사료가 아닌 항목(자문료 등)은 기타소득세만 — 지급·증빙 탭에만
-  const role = fee ? kind : /보조\s*강사/.test(hwOne(f.basis)) ? '보조강사' : /주\s*강사/.test(hwOne(f.basis)) ? '주강사' : /보조\s*강사/.test(content) ? '보조강사' : '주강사';
+  const BL = hwBasisLines(f.basis), roleSet = [...new Set(BL.map(l => l.role).filter(Boolean))];
+  const multiRole = !fee && roleSet.length > 1;   // 한 신청서에 주강사·보조강사가 함께
+  const role = fee ? kind : multiRole ? '주강사·보조강사' : /보조\s*강사/.test(hwOne(f.basis)) ? '보조강사' : /주\s*강사/.test(hwOne(f.basis)) ? '주강사' : /보조\s*강사/.test(content) ? '보조강사' : '주강사';
   // 프로그램: 「2026년 디지털새싹 뉴턴 [컬러풀 코딩 메이킹] 주강사 활동」 → 뉴턴 [컬러풀 코딩 메이킹]
   const body = content.replace(/\s*[(（]?\s*(주\s*강사|보조\s*강사)\s*[)）]?\s*(활동)?\s*$/, '');
   const pm = fee ? null : body.match(/\S+\s*\[[^\]]*\]?/);
@@ -4205,7 +4265,8 @@ function hwpToApp(f, fname) {
   const now = new Date();
   const y = +(W.year || (content.match(/(20\d\d)\s*년/) || [])[1] || now.getFullYear());
   const mo = W.month || (aisw.ym ? aiswYM().m : now.getMonth() + 1);
-  const calc = B ? Math.round(B.unit * B.per * B.days) : amt;
+  const calc = multiRole ? BL.reduce((s, l) => s + Math.round(l.unit * l.per * l.days), 0) : B ? Math.round(B.unit * B.per * B.days) : amt;
+  const bDays = multiRole ? BL.reduce((s, l) => s + l.days, 0) : B ? B.days : 0, bTotal = multiRole ? BL.reduce((s, l) => s + (l.total || 0), 0) : B ? B.total : 0;
   const notes = [];
   if (jumin.length !== 13) notes.push('주민번호 13자리 아님');
   if (!W.dates.length) notes.push('일시를 읽지 못함');
@@ -4214,24 +4275,27 @@ function hwpToApp(f, fname) {
   if (!B) notes.push('산출근거를 읽지 못함');
   else {
     if (calc !== amt) notes.push(`산출근거 계산 ${fmtN(calc)}원 ≠ 금액 ${fmtN(amt)}원`);
-    else if (B.total && B.total !== amt) notes.push(`산출근거에 적힌 합계 ${fmtN(B.total)}원 ≠ 금액 ${fmtN(amt)}원`);
+    else if (bTotal && bTotal !== amt) notes.push(`산출근거에 적힌 합계 ${fmtN(bTotal)}원 ≠ 금액 ${fmtN(amt)}원`);
     if (fee) {   // 자문료는 여러 달에 걸쳐도 날짜 수 전체로 비교 (「5회」처럼 일수 대신 횟수만 쓴 경우도)
       const cnt = B.hasDays ? B.days : B.perUnit === '회' ? B.per : 0;
       if (cnt && W.nAll && cnt !== W.nAll) notes.push(`일시 ${W.nAll}일 ≠ 산출근거 ${cnt}${B.hasDays ? '일' : '회'}`);
-    } else if (W.dates.length && B.days !== W.dates.length) notes.push(`일시 ${W.dates.length}일 ≠ 산출근거 ${B.days}일`);
+    } else if (W.dates.length && bDays !== W.dates.length) notes.push(`일시 ${W.dates.length}일 ≠ 산출근거 ${bDays}일`);
   }
   if (/예시/.test([f.when, f.place, f.content, f.basis].join(' '))) notes.push('양식의 (예시) 문구가 남아 있음');
   if (!A.bank) notes.push('은행명 없음');
   if (!A.acct) notes.push('계좌번호 없음');
   if (!hwOne(f.addr)) notes.push('주소 없음');
   const per = B ? B.per : 1, nd = B ? B.days : (W.dates.length || 1);
-  const basisOk = B && calc === amt && (!B.total || B.total === amt);   // 계산이 안 맞으면 신청서에 적힌 그대로 보여 줌
-  const basisText = fee ? hwOne(f.basis) : basisOk ? `${role} : ${fmtN(B.unit)}원*${appFmtNum(B.per)}${B.perUnit}${B.hasDays ? `*${B.days}일` : ''} = ${fmtN(amt)}원` : hwOne(f.basis);
+  const basisOk = B && calc === amt && (!bTotal || bTotal === amt);   // 계산이 안 맞으면 신청서에 적힌 그대로 보여 줌
+  const bLine = (r, l, t) => `${r} : ${fmtN(l.unit)}원*${appFmtNum(l.per)}${l.perUnit}${l.hasDays ? `*${l.days}일` : ''} = ${fmtN(t)}원`;
+  const basisText = fee ? hwOne(f.basis) : !basisOk ? hwOne(f.basis) : multiRole ? BL.map(l => bLine(l.role, l, Math.round(l.unit * l.per * l.days))).join('\n') : bLine(role, B, amt);
+  const segs = fee ? null : hwSegs(f, W, BL.length ? BL : B ? [{ ...B, role }] : [], role, place, program, y, mo, notes);
+  if (segs && segs.reduce((s, x) => s + x.amt, 0) !== amt) notes.push(`프로그램별 합계 ${fmtN(segs.reduce((s, x) => s + x.amt, 0))}원 ≠ 금액 ${fmtN(amt)}원`);
   const ym = `${y}-${pad2(mo)}`;
   return { biz, id: [biz, name, role, hwNorm(place), program.replace(/[\s\[\]]/g, ''), ym, W.dates.join(','), W.time, amt].join('|'),
-    fname, name, jumin, org, tel: hwOne(f.tel), addr: hwOne(f.addr), when: hwOne(f.when), place, content, program, role,
+    fname, name, jumin, org, tel: hwOne(f.tel).replace(/\s*-\s*/g, '-'), addr: hwOne(f.addr), when: hwOne(f.when), place, content, program, role,
     whenRaw: String(f.when ?? '').trim(), placeRaw: String(f.place ?? '').trim(),
-    unit: B ? B.unit : Math.round(amt / (nd || 1)), per, days: nd, cha: per * nd, amt, calc, basisText,
+    unit: B ? B.unit : Math.round(amt / (nd || 1)), per, days: nd, cha: multiRole ? BL.reduce((s, l) => s + l.per * l.days, 0) : per * nd, amt, calc, basisText, segs,
     bank: A.bank, acct: A.acct, ym, dates: W.dates, time: W.time, notes, fee, kind };
 }
 /* --- 옛 형식 한글(.hwp, HWP 5.0) 읽기: 표의 칸(LIST_HEADER)마다 그 안 문단 글자(PARA_TEXT)를 모음 --- */
@@ -4374,7 +4438,8 @@ function buildAiswWb() {
 
   // 같은 학교·프로그램·일자의 주강사와 보조강사를 한 줄로
   const days = [['연번', '주강사', '학교명', '프로그램', '일자', '시간', '금액', '차수', '총액', '보조강사', '일자', '시간', '금액', '차수', '총액']];
-  const sorted = [...apps].sort((a, b) => a.place.localeCompare(b.place, 'ko') || a.program.localeCompare(b.program, 'ko') || (a.dates[0] || 0) - (b.dates[0] || 0) || a.name.localeCompare(b.name, 'ko'));
+  const units = apps.flatMap(a => a.segs && a.segs.length ? a.segs.map((s, k) => ({ ...s, name: a.name, id: a.id + '#' + k, _app: a })) : [a]);
+  const sorted = [...units].sort((a, b) => a.place.localeCompare(b.place, 'ko') || a.program.localeCompare(b.program, 'ko') || (a.dates[0] || 0) - (b.dates[0] || 0) || a.name.localeCompare(b.name, 'ko'));
   const groups = new Map();
   sorted.forEach(a => {
     const k = [hwNorm(a.place), a.program.replace(/[\s\[\]]/g, ''), a.dates.join(',')].join('|');
@@ -4383,17 +4448,17 @@ function buildAiswWb() {
   });
   let cha = 0, tot = 0, sCha = 0, sTot = 0, n = 0;
   const noOf = new Map();
-  const part = a => a ? [pOf.get(a).key, a.dates.join(','), a.time, fmtN(a.unit), appFmtNum(a.cha), fmtN(a.amt)] : null;
+  const part = a => a ? [pOf.get(a._app || a).key, a.dates.join(','), a.time, fmtN(a.unit), appFmtNum(a.cha), fmtN(a.amt)] : null;
   groups.forEach(g => {
     for (let i = 0; i < Math.max(g.M.length, g.S.length); i++) {
       const M = g.M[i], S = g.S[i], any = M || S, pm = part(M), ps = part(S);
       n++;
-      if (M) { cha += M.cha; tot += M.amt; noOf.set(M.id, n); }
-      if (S) { sCha += S.cha; sTot += S.amt; noOf.set(S.id, n); }
+      if (M) { cha += M.cha; tot += M.amt; noOf.set(M.id, n); if (M._app && !noOf.has(M._app.id)) noOf.set(M._app.id, n); }
+      if (S) { sCha += S.cha; sTot += S.amt; noOf.set(S.id, n); if (S._app && !noOf.has(S._app.id)) noOf.set(S._app.id, n); }
       days.push([String(n), pm ? pm[0] : '-', any.place, any.program, ...(pm ? pm.slice(1) : ['', '', '', '', '']), ...(ps || ['', '', '', '', '', ''])]);
     }
   });
-  const anySub = apps.some(a => a.role === '보조강사');
+  const anySub = units.some(a => a.role === '보조강사');
   days.push(['합계', '', '', '', '', '', '', appFmtNum(cha), fmtN(tot), '', '', '', '', anySub ? appFmtNum(sCha) : '', anySub ? fmtN(sTot) : '']);
 
   const w = XLSX.utils.book_new();
@@ -4534,7 +4599,7 @@ function renderHwp() {
       <td class="l" title="${qattr(a.fname)}" style="font-size:11px;color:#64748b">${esc(a.fname)}</td>
       <td class="c"><button type="button" data-hw="del" data-i="${hwList.length - 1}" style="padding:2px 7px;font-size:12px;background:#dc2626">삭제</button></td></tr>`;
   }).join('')).join('');
-  const tot = apps.reduce((s, a) => s + a.amt, 0), nF = apps.filter(a => a.fee).length, nM = apps.filter(a => !a.fee && a.role !== '보조강사').length;
+  const tot = apps.reduce((s, a) => s + a.amt, 0), nF = apps.filter(a => a.fee).length, nM = apps.filter(a => !a.fee && a.role !== '보조강사').length, nS = apps.filter(a => !a.fee && /보조/.test(a.role)).length;
   const { y, m } = aiswYM();
   paper.innerHTML = `<h3 class="eh">${biz === 'aisw' ? 'AISW교육센터' : '초등돌봄·교육'} · ${y}년 ${m}월 인건비 지급 신청서 (${apps.length}건 · 강사 ${people.length}명)</h3>
     <div class="payscroll"><table class="data m-pay" style="min-width:1500px">
@@ -4542,7 +4607,7 @@ function renderHwp() {
     <thead><tr><th>번호</th><th>성명</th><th>주민등록번호</th><th>구분</th><th>소속</th><th>장소</th><th>프로그램</th><th>일시</th><th>산출근거</th><th>금액(원)</th><th>은행 · 계좌번호</th><th>확인</th><th>파일</th><th></th></tr></thead>
     <tbody>${body}<tr class="sum"><td class="c" colspan="9">합계 (${apps.length}건 · ${people.length}명)</td><td class="num">${fmtN(tot)}</td><td colspan="4"></td></tr></tbody></table></div>` + aiswYearHtml() + cvTableHtml();
   if (!flash && nBad) msg.style.color = '#dc2626';
-  msg.textContent = (flash ? flash + ' · ' : '') + `${y}년 ${m}월 · 신청서 ${apps.length}건(주강사 ${nM} · 보조강사 ${apps.length - nM - nF}${nF ? ` · 자문료 ${nF}` : ''}) · 강사 ${people.length}명 · 합계 ${fmtN(tot)}원` +
+  msg.textContent = (flash ? flash + ' · ' : '') + `${y}년 ${m}월 · 신청서 ${apps.length}건(주강사 ${nM} · 보조강사 ${nS}${nF ? ` · 자문료 ${nF}` : ''}) · 강사 ${people.length}명 · 합계 ${fmtN(tot)}원` +
     (nBad ? ` · ※ 확인 필요 ${nBad}건 (표의 「확인」 칸 — 신청서를 고쳐 다시 넣으면 바뀝니다)` : '') +
     (wb && !srcHwp ? ' · ※ 업로드한 엑셀 자료 적용 중 — 이 자료를 쓰려면 [신청서 자료 적용]' : '');
 }
@@ -4812,6 +4877,7 @@ function hwFillSection(xml, v) {
       // 양식에 「앵커 늘봄학교 주강사 업무」처럼 구분이 적혀 있으면 그 문구에서 구분만 바꿈 (수업 보고 안내 줄은 뺌)
       const lines = byLocalName(tcs[i + 1], 'p').filter(p => !hwInMemo(p)).map(p => byLocalName(p, 't').filter(t => !hwInMemo(t)).map(t => t.textContent).join('').trim()).filter(Boolean);
       const L = lines.find(l => /(주|보조)\s*강사/.test(l) && !/수업\s*보고/.test(l));
+      if (L && v.roleLines) { hwSetCell(tcs[i + 1], v.roleLines.map(x => L.replace(/(주|보조)\s*강사/, x.role).replace(/\s*[:：]\s*$/, '') + (x.when ? ': ' + x.when : '') + (x.programs ? '\n' + x.programs : '')).join('\n')); done.add(k); filled.push(lab); i++; continue; }
       if (L && v.role) { hwSetCell(tcs[i + 1], L.replace(/(주|보조)\s*강사/, v.role) + (v.program ? '\n' + v.program : '')); done.add(k); filled.push(lab); i++; continue; }
     }
     if (v[k] === undefined) continue;
@@ -4973,10 +5039,11 @@ function hwOutValues(p) {
   const birth = cent && j.length === 13 ? `${cent + +y2}. ${+j.slice(2, 4)}. ${+j.slice(4, 6)}.` : '';   // 날짜는 「1990. 3. 3.」 표기
   let whenList = p.whenList;
   if (!whenList && p.src) {   // 한글 신청서 자료: 신청서에 적힌 일시·장소 그대로 (여러 줄이면 줄마다)
-    const W = String(p.src.whenRaw || p.src.when || '').split('\n').map(s => s.trim()).filter(Boolean);
+    const W = String(p.src.whenRaw || p.src.when || '').split('\n').map(s => s.trim()).filter(Boolean)
+      .reduce((o, l) => { if (o.length && /^[(（]?\s*\d{1,2}\s*월\s*[)）]?$/.test(o[o.length - 1])) o[o.length - 1] += ' ' + l; else o.push(l); return o; }, []);
     const P = String(p.src.placeRaw || p.src.place || '').split('\n').map(s => s.trim()).filter(Boolean);
     const split = w => { const m = w.match(/\d{1,2}\s*:\s*\d{2}\s*[~∼\-–]\s*\d{1,2}\s*:\s*\d{2}/); return m ? { date2: w.replace(m[0], '').trim(), time: m[0].replace(/\s+/g, '') } : { date2: w, time: '' }; };
-    whenList = W.length > 1 && W.length === P.length ? W.map((w, i) => ({ when: w, ...split(w), place: P[i] })) : [{ when: W.join('\n'), date2: W.map(w => split(w).date2).join('\n'), time: W.map(w => split(w).time).join('\n'), place: P.join('\n') }];
+    whenList = W.length > 1 && P.length <= W.length ? W.map((w, i) => ({ when: w, ...split(w), place: P[i] ?? '' })) : [{ when: W.join('\n'), date2: W.map(w => split(w).date2).join('\n'), time: W.map(w => split(w).time).join('\n'), place: P.join('\n') }];
   }
   return {
     name: dn(p.name), jumin: fmtJumin(j), org: p.org, tel: appTel(p.tel), addr: String(p.addr || '').replace(/,?\n/g, ', ').replace(/,\s*,/g, ','),
@@ -4984,7 +5051,7 @@ function hwOutValues(p) {
     birth, sex: c ? ('13579'.includes(c) ? '남' : '여') : '', kind: p.kindLabel || '강사료', whenList: whenList || [],
     ...(() => { const c = (aisw.cv || {})[j]; return c ? { position: c.position || '', major: c.major || '', wtel: c.wtel || '', edu: c.edu || [], career: c.career || [] } : {}; })(),
     noCv: !$('hwOutCv').checked,
-    role: p.roleLabel || '', program: p.programs || '', isFee: (p.kindLabel || '강사료') !== '강사료'
+    role: p.roleLabel || '', program: p.programs || '', roleLines: p.roleLines || null, isFee: (p.kindLabel || '강사료') !== '강사료'
   };
 }
 function hwOutRows() {
@@ -5011,8 +5078,16 @@ function hwOutRows() {
     } else if (p.src) {
       p.roleLabel = p.src.fee ? '' : p.src.role;
       const pg = String(p.src.program || '').trim();
-      p.programs = p.src.fee || /업무/.test(pg) ? '' : pg;   // 「앵커 늘봄학교 업무」처럼 내용 문장이면 넣지 않음
-      if (!p.src.fee) p.basis = String(p.basis).replace(/\s*:\s*/, ' ').replace(/\s*\*\s*/g, ' * ').replace(/\s*=\s*/, ' = ');
+      p.programs = p.src.fee || /업무/.test(pg) ? '' : pg;
+      if (!p.src.fee && p.src.segs && p.src.segs.length) {   // 한 신청서에 여러 프로그램·구분: 구분마다 일자·프로그램
+        const roles = [...new Set(p.src.segs.map(x => x.role))], [yy, mm] = String(p.src.ym || '').split('-').map(Number);
+        p.roleLines = roles.map(r => {
+          const S = p.src.segs.filter(x => x.role === r), ds = [...new Set(S.flatMap(x => x.dates))].sort((a, b) => a - b);
+          const wds = [...new Set(ds.map(d => new Date(yy, mm - 1, d).getDay()))].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)).map(w => HW_WD[w]);
+          return { role: r, when: roles.length > 1 ? `${ds.join(', ')}일(${wds.join(', ')})` : '', programs: [...new Set([...S].sort((a, b) => ((new Date(yy, mm - 1, a.dates[0]).getDay() + 6) % 7) - ((new Date(yy, mm - 1, b.dates[0]).getDay() + 6) % 7)).map(x => x.program))].join(', ') };
+        });
+      }   // 「앵커 늘봄학교 업무」처럼 내용 문장이면 넣지 않음
+      if (!p.src.fee) p.basis = String(p.basis).replace(/\s*:\s*/g, ' ').replace(/\s*\*\s*/g, ' * ').replace(/\s*=\s*/g, ' = ');
     }
   });
   return built;
