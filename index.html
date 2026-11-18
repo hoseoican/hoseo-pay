@@ -321,6 +321,19 @@
   #bizLogo { display: block; height: 26px; width: auto; margin: 0 0 12px; }
   #bizLogo.biz-aisw { height: 22px; }
   #bizLogo:not([src]) { display: none; }
+
+  /* 수기 입력 일괄 수정 */
+  .bulkbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 8px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 10px; background: #FCFAFA; font-size: 13px; }
+  .bulkbar.on { border-color: var(--hs-200); background: var(--hs-50); }
+  .bulkbar b { color: var(--mute); font-weight: 600; } .bulkbar.on b { color: var(--hs-d); }
+  .bulkbar select, .bulkbar input.bval { padding: 5px 8px; font-size: 13px; }
+  .bulkbar input.bval { width: 200px; }
+  .bulkbar button { padding: 6px 14px; font-size: 13px; }
+  .bulkbar button.bdel { background: #fff; color: var(--danger); border: 1px solid #F1C3BF; box-shadow: none; }
+  .bulkbar button:disabled { opacity: .45; cursor: default; }
+  table.m-edit th.bsel, table.m-edit td.bsel { width: 26px; text-align: center; padding: 0; }
+  table.m-edit input.bsel, table.m-edit input.bsel-all { width: 15px; height: 15px; padding: 0; cursor: pointer; }
+  table.m-edit tr.bon td { background: var(--hs-50); }
 </style>
 </head>
 <body>
@@ -629,7 +642,7 @@
 
 <script>
 // 버전: 고칠 때마다 날짜(와 같은 날 여러 번이면 -2, -3)를 바꿔 주세요
-const APP_VERSION = '2026.11.18-8';
+const APP_VERSION = '2026.11.18-9';
 document.addEventListener('DOMContentLoaded', () => {
   const t = '버전 ' + APP_VERSION;
   ['verSide', 'verFoot'].forEach(id => { const e = document.getElementById(id); if (e) e.textContent = t; });
@@ -3374,7 +3387,8 @@ function renderEdit() {
   $('eApply').style.display = wb && !srcInternal ? '' : 'none';
   const L = curLessons(), ML = work.mainLabel || '주강사';
   const inp = (t, i, f, v, o = {}) => `<input data-t="${t}" data-i="${i}" data-f="${f}" value="${eAttr(v ?? '')}"${o.list ? ` list="${o.list}"` : ''}${o.cls ? ` class="${o.cls}"` : ''}${o.ph ? ` placeholder="${eAttr(o.ph)}"` : ''} style="width:${o.w || 80}px" autocomplete="off">`;
-  const lesRows = L.map((r, i) => `<tr>
+  const ck = (t, i, r) => `<td class="bsel"><input type="checkbox" class="bsel" data-bs="${t}" data-i="${i}"${(t === 'les' ? selLes : selRos).has(r) ? ' checked' : ''}></td>`;
+  const lesRows = L.map((r, i) => `<tr${selLes.has(r) ? ' class="bon"' : ''}>${ck('les', i, r)}
     <td style="text-align:center">${i + 1}</td>
     <td>${inp('les', i, 'name', r.name, { list: 'rosNames', w: 76 })}<div class="warn" id="c-warn-${i}"></div></td>
     <td>${inp('les', i, 'school', r.school, { w: 130 })}</td>
@@ -3390,7 +3404,7 @@ function renderEdit() {
     <td>${inp('les', i, 'sAmt', amtShow(r.sAmt), { w: 66, ph: fmtN(DEF_SUB) })}</td>
     <td class="calc" id="c-stot-${i}"></td>
     <td><button type="button" data-act="delLes" data-i="${i}">삭제</button></td></tr>`).join('');
-  const rosRows = work.roster.map((r, j) => `<tr>
+  const rosRows = work.roster.map((r, j) => `<tr${selRos.has(r) ? ' class="bon"' : ''}>${ck('ros', j, r)}
     <td style="text-align:center">${j + 1}</td>
     <td>${inp('ros', j, 'name', r.name, { w: 80 })}</td>
     <td>${inp('ros', j, 'jumin', r.jumin, { w: 120, cls: 'secret', ph: '13자리' })}</td>
@@ -3406,20 +3420,89 @@ function renderEdit() {
     <datalist id="bankNames2">${(payTpl ? [...payTpl.banks.keys()] : []).map(b => `<option value="${eAttr(b)}">`).join('')}</datalist>
     <h3 class="eh">① ${y}년 ${m}월 수업 (${L.length}건)</h3>
     <span class="hint tip" tabindex="0">일자는 쉼표로 구분 (예: 7,14,21) · <b>노란 칸</b>은 공휴일·휴강 확인<i class="ti">i</i><span class="tipbody">일자는 쉼표로 구분합니다(예: 7,14,21). 차수 = 일자 개수 × 일일 차수(비우면 시간에서 계산: 2시간 수업 → 2), 총액 = 단가 × 차수. 단가를 비우면 기본값(${esc(ML)} ${fmtN(defMainAmt())}원, 보조강사 ${fmtN(DEF_SUB)}원)으로 계산합니다. 노란 칸은 지난달에서 복사해 요일에 맞춰 바꾼 일자이니 공휴일·휴강을 확인하세요.</span></span>
+    ${bulkBar('les', ML)}
     <div class="escroll"><table class="data m-edit"><thead><tr>
-      <th>연번</th><th>${esc(ML)}</th><th>학교명</th><th>프로그램</th><th>일자</th><th>시간</th><th>단가(원)</th><th>일일<br>차수</th><th>차수</th><th>총액(원)</th>
+      <th class="bsel"><input type="checkbox" class="bsel-all" data-bs="les" title="전체 선택"></th><th>연번</th><th>${esc(ML)}</th><th>학교명</th><th>프로그램</th><th>일자</th><th>시간</th><th>단가(원)</th><th>일일<br>차수</th><th>차수</th><th>총액(원)</th>
       <th class="sub">보조강사</th><th class="sub">보조 일자</th><th class="sub">보조 시간</th><th class="sub">단가(원)</th><th class="sub">보조 총액(원)</th><th></th></tr></thead>
       <tbody>${lesRows}</tbody>
-      <tfoot><tr><td colspan="8" style="text-align:center;font-weight:bold">합계</td><td class="calc" id="c-sumcha"></td><td class="calc" id="c-sum"></td><td colspan="4"></td><td class="calc" id="c-ssum"></td><td></td></tr></tfoot>
+      <tfoot><tr><td colspan="9" style="text-align:center;font-weight:bold">합계</td><td class="calc" id="c-sumcha"></td><td class="calc" id="c-sum"></td><td colspan="4"></td><td class="calc" id="c-ssum"></td><td></td></tr></tfoot>
     </table><div class="eadd"><button type="button" data-act="addLes">수업 추가</button></div></div>
     <h3 class="eh">② 강사 명부 (${work.roster.length}명)</h3>
     <span class="hint tip" tabindex="0">한 번 등록하면 매달 그대로 사용<i class="ti">i</i><span class="tipbody">한 번 등록하면 매달 그대로 씁니다. 은행명은 「국민」처럼 줄여 써도 대량청구 일괄등록 파일에서 자동으로 맞춥니다.</span></span>
+    ${bulkBar('ros')}
     <div class="escroll"><table class="data m-edit${sec}"><thead><tr>
-      <th>번호</th><th>이름</th><th>주민번호</th><th>연락처</th><th>은행명</th><th>계좌번호</th><th>주소</th><th>${m}월 청구액(원)</th><th></th></tr></thead>
+      <th class="bsel"><input type="checkbox" class="bsel-all" data-bs="ros" title="전체 선택"></th><th>번호</th><th>이름</th><th>주민번호</th><th>연락처</th><th>은행명</th><th>계좌번호</th><th>주소</th><th>${m}월 청구액(원)</th><th></th></tr></thead>
       <tbody>${rosRows}</tbody>
     </table><div class="eadd"><button type="button" data-act="addRos">강사 추가</button></div></div>`;
-  updateEditCalc();
+  updateEditCalc(); updBulk();
 }
+/* ---------- 수기 입력: 선택 행 일괄 변경 · 일괄 삭제 ---------- */
+const selLes = new Set(), selRos = new Set();   // 선택한 행(행 객체 그대로 기억)
+const BULK_COLS = {
+  les: ml => [['name', ml || '주강사'], ['school', '학교명'], ['program', '프로그램'], ['dates', '일자'], ['time', '시간'], ['amt', '단가(원)'], ['per', '일일차수'],
+    ['sName', '보조강사'], ['sDates', '보조 일자'], ['sTime', '보조 시간'], ['sAmt', '보조 단가(원)']],
+  ros: () => [['tel', '연락처'], ['bank', '은행명'], ['addr', '주소']],
+};
+function bulkBar(t, ml) {
+  return `<div class="bulkbar" data-bulk="${t}"><b>선택 <span class="bcnt">0</span>건</b>
+    <select class="bcol">${BULK_COLS[t](ml).map(([f, l]) => `<option value="${f}">${esc(l)}</option>`).join('')}</select>
+    <input type="text" class="bval" placeholder="" autocomplete="off">
+    <button type="button" class="bapply" data-bulk-act="set" data-bs="${t}">일괄 변경</button>
+    <button type="button" class="bdel" data-bulk-act="del" data-bs="${t}">선택 삭제</button>
+    <button type="button" class="bnone ghost" data-bulk-act="none" data-bs="${t}">선택 해제</button></div>`;
+}
+const bulkRows = t => t === 'les' ? curLessons() : work.roster;
+const bulkSel = t => t === 'les' ? selLes : selRos;
+function updBulk() {
+  ['les', 'ros'].forEach(t => {
+    const rows = bulkRows(t), S = bulkSel(t), n = rows.filter(r => S.has(r)).length;
+    const bar = document.querySelector(`.bulkbar[data-bulk="${t}"]`); if (!bar) return;
+    bar.querySelector('.bcnt').textContent = n; bar.classList.toggle('on', n > 0);
+    bar.querySelectorAll('button').forEach(b => { b.disabled = !n; });
+    const all = document.querySelector(`.bsel-all[data-bs="${t}"]`);
+    if (all) { all.checked = n > 0 && n === rows.length; all.indeterminate = n > 0 && n < rows.length; }
+  });
+}
+let bulkLast = { les: -1, ros: -1 };
+$('paper').addEventListener('click', e => {   // Shift 누르고 클릭하면 범위 선택
+  const c = e.target.closest('input.bsel'); if (!c || mode !== 'edit') return;
+  const t = c.dataset.bs, i = +c.dataset.i, rows = bulkRows(t), S = bulkSel(t);
+  const on = c.checked, from = e.shiftKey && bulkLast[t] >= 0 ? Math.min(bulkLast[t], i) : i, to = e.shiftKey && bulkLast[t] >= 0 ? Math.max(bulkLast[t], i) : i;
+  for (let k = from; k <= to; k++) { const r = rows[k]; if (!r) continue; on ? S.add(r) : S.delete(r);
+    const cb = document.querySelector(`input.bsel[data-bs="${t}"][data-i="${k}"]`); if (cb) { cb.checked = on; cb.closest('tr').classList.toggle('bon', on); } }
+  bulkLast[t] = i; updBulk();
+});
+$('paper').addEventListener('change', e => {
+  const a = e.target.closest('input.bsel-all'); if (!a) return;
+  const t = a.dataset.bs, rows = bulkRows(t), S = bulkSel(t);
+  rows.forEach(r => a.checked ? S.add(r) : S.delete(r));
+  document.querySelectorAll(`input.bsel[data-bs="${t}"]`).forEach(cb => { cb.checked = a.checked; cb.closest('tr').classList.toggle('bon', a.checked); });
+  updBulk();
+});
+$('paper').addEventListener('click', e => {
+  const b = e.target.closest('button[data-bulk-act]'); if (!b) return;
+  const t = b.dataset.bs, rows = bulkRows(t), S = bulkSel(t), picked = rows.filter(r => S.has(r));
+  const bar = b.closest('.bulkbar'), what = t === 'les' ? '수업' : '강사';
+  if (b.dataset.bulkAct === 'none') { picked.forEach(r => S.delete(r)); render(); return; }
+  if (!picked.length) return;
+  if (b.dataset.bulkAct === 'set') {
+    const sel = bar.querySelector('.bcol'), f = sel.value, label = sel.selectedOptions[0].textContent;
+    let v = bar.querySelector('.bval').value.trim();
+    if (f === 'amt' || f === 'sAmt') v = v ? amtShow(v) : '';
+    if (!confirm(`선택한 ${what} ${picked.length}건의 「${label}」을(를) ${v ? `「${v}」(으)로 바꿀까요?` : '모두 비울까요?'}`)) return;
+    picked.forEach(r => { r[f] = v; if (f === 'dates' || f === 'sDates') r.stale = false; });
+    saveWork(); render();
+    $('msg').textContent = `선택한 ${what} ${picked.length}건의 「${label}」을(를) ${v ? `「${v}」(으)로 바꿨습니다` : '비웠습니다'}.`;
+    return;
+  }
+  if (b.dataset.bulkAct === 'del') {
+    if (!confirm(`선택한 ${what} ${picked.length}건을 삭제할까요?${t === 'ros' ? '\n(수업 목록의 강사 이름은 그대로 남습니다)' : ''}`)) return;
+    const keep = rows.filter(r => !S.has(r)); rows.length = 0; rows.push(...keep);
+    picked.forEach(r => S.delete(r));
+    saveWork(); render();
+    $('msg').textContent = `선택한 ${what} ${picked.length}건을 삭제했습니다.`;
+  }
+});
 function updateEditCalc() {
   const L = curLessons(), RK = rosterKeys(), claim = claimMap(RK), known = new Set(work.roster.map(r => exactName(r.name)));
   let cha = 0, tot = 0, sTot = 0, missing = new Set(), unpicked = new Set();
